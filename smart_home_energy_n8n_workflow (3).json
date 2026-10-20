@@ -1,0 +1,124 @@
+{
+  "name": "Smart Home Energy Automation - Webhook & Email",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smart-home-telemetry",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-in",
+      "name": "Webhook Trigger (Streamlit UI)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract telemetry parameters and evaluate Time-of-Use (TOU) tariff\nconst item = $input.first().json.body || $input.first().json;\nconst powerW = Number(item.active_power_w || item.power || 0);\nconst voltage = Number(item.voltage_v || item.voltage || 230);\nconst current = Number(item.current_a || item.current || 0);\nconst energyKwh = Number(item.accumulated_energy_kwh || item.energy_kwh || 0);\nconst userEmail = item.email || \"user@example.com\";\n\nconst currentHour = new Date().getHours();\n// Peak tariff window: 6 PM to 10 PM (18:00 - 22:00)\nconst isPeakHour = currentHour >= 18 && currentHour < 22;\nconst tariffRate = isPeakHour ? 0.35 : 0.14; // USD per kWh\nconst powerLimitW = isPeakHour ? 2200 : 3500; // stricter budget during peak\n\nconst hourlyCost = (powerW / 1000) * tariffRate;\nconst co2EmissionRate = (powerW / 1000) * 0.42; // kg CO2 per hour\nconst isOverloaded = powerW > powerLimitW;\n\nreturn [{\n  json: {\n    device_id: item.device_id || \"SMART-METER-01\",\n    timestamp: new Date().toISOString(),\n    power_w: powerW,\n    voltage_v: voltage,\n    current_a: current,\n    energy_kwh: energyKwh,\n    user_email: userEmail,\n    is_peak_hour: isPeakHour,\n    tariff_rate: tariffRate,\n    power_limit_w: powerLimitW,\n    is_overloaded: isOverloaded,\n    exceeded_by_w: Math.max(0, powerW - powerLimitW),\n    hourly_cost_usd: Number(hourlyCost.toFixed(4)),\n    co2_kg_per_hr: Number(co2EmissionRate.toFixed(4)),\n    status_message: isOverloaded ? \"🚨 CRITICAL: Power Exceeded Budget Limit! Load Shedding Triggered.\" : \"✅ HEALTHY: Energy consumption within normal limits.\"\n  }\n}];"
+      },
+      "id": "node-code-calc",
+      "name": "Energy Math & Tariff Evaluator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "node-respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        720,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_overloaded }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-if-overload",
+      "name": "Is Overloaded Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        720,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.user_email }}",
+        "subject": "=🚨 Smart Home Alert: Peak Power Threshold Exceeded ({{ $json.power_w }}W)",
+        "emailType": "text",
+        "message": "=⚠️ CRITICAL ENERGY ALERT!\n\nYour smart home current load of {{ $json.power_w }}W has exceeded the set safety limit of {{ $json.power_limit_w }}W.\n\nDetails:\n- Device ID: {{ $json.device_id }}\n- Current Load: {{ $json.power_w }} Watts\n- Limit: {{ $json.power_limit_w }} Watts\n- Exceeded By: {{ $json.exceeded_by_w }} Watts\n- Estimated Hourly Cost: ${{ $json.hourly_cost_usd }}\n\nAction Taken: Tier-2 High-load Relays (Water Heater / AC) auto-shedding recommended."
+      },
+      "id": "node-gmail-alert",
+      "name": "Send Gmail Alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [
+        960,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger (Streamlit UI)": {
+      "main": [
+        [
+          {
+            "node": "Energy Math & Tariff Evaluator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Energy Math & Tariff Evaluator": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Overloaded Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Overloaded Check": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
